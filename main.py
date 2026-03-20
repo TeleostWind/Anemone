@@ -2,20 +2,23 @@ import discord
 from discord.ext import commands
 import json
 import os
+import asyncio
 from flask import Flask
 from threading import Thread
 
-# --- RENDER KEEP-ALIVE SERVER ---
-app = Flask('')
+# --- RENDER WEB SERVER (Keep-Alive) ---
+app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "Bot is alive and running!"
+    return "Bot is online and cloning at maximum speed!"
 
-def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+def run_server():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    t = Thread(target=run)
+    t = Thread(target=run_server)
     t.start()
 
 # --- DISCORD BOT SETUP ---
@@ -38,10 +41,10 @@ async def copy(ctx):
     for channel in ctx.guild.text_channels:
         channel_messages = []
         try:
-            # oldest_first=True so they paste in the correct chronological order
+            # oldest_first=True ensures correct chronological pasting
             async for msg in channel.history(limit=None, oldest_first=True):
                 if not msg.content:
-                    continue # Skips pure attachments/pics/videos
+                    continue # Skips pure attachments/images/videos
                 
                 channel_messages.append({
                     "channel": channel.name,
@@ -57,7 +60,7 @@ async def copy(ctx):
         except Exception as e:
             print(f"Skipped #{channel.name} due to error: {e}")
 
-    # Flag the absolute latest 25 messages per user globally
+    # Flag the absolute latest 25 messages per user globally for Webhooks
     user_counts = {}
     for msg in reversed(all_messages):
         uid = msg["author_id"]
@@ -65,7 +68,7 @@ async def copy(ctx):
             msg["use_webhook"] = True
             user_counts[uid] = user_counts.get(uid, 0) + 1
 
-    # Group by channel
+    # Group by channel so we can paste channel-by-channel
     server_data = {}
     for msg in all_messages:
         c = msg["channel"]
@@ -73,6 +76,7 @@ async def copy(ctx):
             server_data[c] = []
         server_data[c].append(msg)
 
+    # Save to Render's temporary disk
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(server_data, f, indent=4)
         
@@ -81,7 +85,7 @@ async def copy(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def paste(ctx):
-    await ctx.send("Pasting messages as fast as possible relying on discord.py's internal API handler...")
+    await ctx.send("Pasting messages at absolute maximum speed...")
     
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -97,29 +101,30 @@ async def paste(ctx):
             for msg in server_data[channel.name]:
                 try:
                     if msg["use_webhook"]:
-                        # Webhook for the latest 25 per user
+                        # Webhook format for the latest 25 per user
                         await webhook.send(
                             content=msg["content"],
                             username=msg["author_name"],
                             avatar_url=msg["author_avatar"]
                         )
                     else:
-                        # User requested exact format: Teleost (12/5/2024 , 6:47 PM) : hi
-                        formatted_text = f"{msg['author_name']} ({msg['date_str']}) : {msg['content']}"
+                        # Standard format for older messages to save time
+                        formatted_text = f"**{msg['author_name']}** ({msg['date_str']}) : {msg['content']}"
                         await channel.send(formatted_text)
                         
                 except discord.errors.HTTPException as e:
-                    # Fallback just in case Discord API temporarily chokes on the speed
-                    print(f"Discord API bottleneck in #{channel.name}: {e}. Pausing briefly...")
-                    import asyncio
-                    await asyncio.sleep(2) 
+                    # discord.py usually auto-handles rate limits, but this catches hard blocks
+                    print(f"Hit API limit in #{channel.name}: {e}. Pausing for 3 seconds...")
+                    await asyncio.sleep(3) 
                 except Exception as e:
                     print(f"Failed message in #{channel.name}: {e}")
             
             await webhook.delete()
             
-    await ctx.send("Server completely cloned!")
+    await ctx.send("Server perfectly cloned!")
 
-# Fire up the background server and bot
+# 1. Start the Flask keep-alive server in the background
 keep_alive()
+
+# 2. Boot the Discord bot on the main thread
 bot.run(os.environ.get('DISCORD_TOKEN'))
